@@ -16,9 +16,13 @@ def get_features():
         print('- {} is not existed. Let\'s generate it'.format(name__features_user))
 
         # Step #1. Grouped by USER_ID_1, USER_ID_2, USER_ID_3
-        usr1 = df.groupby([df.USER_ID_1, df.USER_ID_2, df.USER_ID_3]).agg({'SESSION_CNT': ['sum', 'mean']})
+        usr1 = df.groupby([df.USER_ID_1, df.USER_ID_2, df.USER_ID_3]).agg({'ORDERED': 'sum',
+                                                                           'SESSION_CNT': ['sum', 'mean']
+                                                                          })
         usr1.columns = usr1.columns.droplevel(0)
-        usr1.columns = ['USR_SESSION_CNT_SUM', 'USR_SESSION_CNT_MEAN']
+        usr1.columns = ['USR_ORDERED_SUM',
+                        'USR_SESSION_CNT_SUM', 'USR_SESSION_CNT_MEAN'
+                       ]
         usr1.reset_index(inplace=True)
 
         # Step #2. Grouped by USER_ID_1, USER_ID_2
@@ -76,13 +80,17 @@ def get_features():
         print('- {} is not existed. Let\'s generate it'.format(name__features_product))
 
         # Grouped by PRODUCT_ID
-        prd = df.groupby([df.PRODUCT_ID]).agg({'LAST_EPISODE': ['sum', 'mean'],
-                                               'START_DATE': ['sum', 'mean'],
-                                               'TOTAL_EPISODE_CNT': ['sum', 'mean']})
-        prd.columns = prd.columns.droplevel(0)
-        prd.columns = ['PRD_LAST_EPISODE_SUM', 'PRD_LAST_EPISODE_MEAN',
-                       'PRD_START_DATE_SUM', 'PRD_START_DATE_MEAN',
-                       'PRD_TOTAL_EPISODE_CNT_SUM', 'PRD_TOTAL_EPISODE_CNT_MEAN']
+        prd = df.groupby([df.PRODUCT_ID]).agg({'ORDERED' : 'sum',
+                                               # 'LAST_EPISODE': ['sum', 'mean'],
+                                               # 'START_DATE': ['sum', 'mean'],
+                                               # 'TOTAL_EPISODE_CNT': ['sum', 'mean']
+                                              })
+        # prd.columns = prd.columns.droplevel(0)
+        prd.columns = ['PRD_ORDERED_SUM',
+                       # 'PRD_LAST_EPISODE_SUM', 'PRD_LAST_EPISODE_MEAN',
+                       # 'PRD_START_DATE_SUM', 'PRD_START_DATE_MEAN',
+                       # 'PRD_TOTAL_EPISODE_CNT_SUM', 'PRD_TOTAL_EPISODE_CNT_MEAN'
+                      ]
         prd.reset_index(inplace=True)
 
         print('- Saving...')
@@ -116,17 +124,40 @@ def get_features():
         return usr_prd
 
     def generate_features(dtrain, dtest):
-        usr = generate_user_features(dtrain)
+        # We do not use user_features because they took my cv score down!
+        # usr = generate_user_features(dtrain)
         prd = generate_product_features(dtrain)
         usr_prd = generate_user_product_features(dtrain)
 
-        dtrain = dtrain.merge(usr, on=['USER_ID_1', 'USER_ID_2', 'USER_ID_3'], how='left') \
-            .merge(prd, on=['PRODUCT_ID'], how='left') \
-            .merge(usr_prd, on=['USER_ID_1', 'USER_ID_2', 'USER_ID_3', 'PRODUCT_ID'], how='left')
+        # Merge usr_prd with original data
+        dtrain = dtrain.merge(usr_prd, on=['USER_ID_1', 'USER_ID_2', 'USER_ID_3', 'PRODUCT_ID'], how='left') \
+                       .merge(prd, on=['PRODUCT_ID'], how='left')
+        dtest = dtest.merge(usr_prd, on=['USER_ID_1', 'USER_ID_2', 'USER_ID_3', 'PRODUCT_ID'], how='left') \
+                     .merge(prd, on=['PRODUCT_ID'], how='left')
 
-        dtest = dtest.merge(usr, on=['USER_ID_1', 'USER_ID_2', 'USER_ID_3'], how='left') \
-            .merge(prd, on=['PRODUCT_ID'], how='left') \
-            .merge(usr_prd, on=['USER_ID_1', 'USER_ID_2', 'USER_ID_3', 'PRODUCT_ID'], how='left')
+        # Concatenate USER_ID
+        dtrain['USER_ID'] = dtrain[['USER_ID_1', 'USER_ID_2', 'USER_ID_3']].apply(
+            lambda x: '{}_{}_{}'.format(x[0], x[1], x[2]), axis=1)
+        dtrain.drop(['USER_ID_1', 'USER_ID_2', 'USER_ID_3'], axis=1, inplace=True)
+        dtest['USER_ID'] = dtest[['USER_ID_1', 'USER_ID_2', 'USER_ID_3']].apply(
+            lambda x: '{}_{}_{}'.format(x[0], x[1], x[2]), axis=1)
+        dtest.drop(['USER_ID_1', 'USER_ID_2', 'USER_ID_3'], axis=1, inplace=True)
+
+        # Add combined features
+        dtrain['UP_PRD_ORDERED_RATIO'] = (dtrain.UP_ORDERED_SUM / dtrain.PRD_ORDERED_SUM).astype(np.float32)
+        dtest['UP_PRD_ORDERED_RATIO'] = (dtest.UP_ORDERED_SUM / dtest.PRD_ORDERED_SUM).astype(np.float32)
+
+        # Remove some 'less important' initial features
+        drop_column_list = ['BUY_PRODUCT_31', 'BUY_PRODUCT_47', 'BUY_PRODUCT_54',
+                            'BUY_PRODUCT_63', 'BUY_PRODUCT_64', 'BUY_PRODUCT_69',
+                            'BUY_PRODUCT_78', 'BUY_PRODUCT_85', 'BUY_PRODUCT_91', 'BUY_PRODUCT_97',
+                            'BUY_PRODUCT_58',
+                            'SCHEDULE_4', 'SCHEDULE_10',
+                            'GENRE_5', 'GENRE_7', 'GENRE_10', 'GENRE_11', 'GENRE_12', 'GENRE_13', 'GENRE_17', 'GENRE_18',
+                            'TAG_3', 'TAG_4', 'TAG_5',
+                            'TENDENCY_9']
+        dtrain.drop(drop_column_list, axis=1, inplace=True)
+        dtest.drop(drop_column_list, axis=1, inplace=True)
 
         print('Train Features {}: [{}]'.format(dtrain.shape, ', '.join(dtrain.columns)))
         print('Test Features {}: [{}]'.format(dtest.shape, ', '.join(dtest.columns)))
